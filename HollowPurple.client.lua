@@ -1,5 +1,5 @@
 --[[
-  HOLLOW PURPLE / 200% / MAXIMUM OUTPUT 4.0
+  HOLLOW PURPLE / 200% / SORCERER DIRECTION 5.0
   LocalScript -> StarterPlayer > StarterPlayerScripts. Remove the old script.
   Hold G / on-screen button, release to fire. Escape cancels before release.
   Standalone = visual preview. Add HollowPurple.server.lua for multiplayer damage.
@@ -35,7 +35,10 @@ local CONFIG = {
     FlashStrength = 0.35, -- 0 disables full-screen impact frames.
     FovKick = 8, -- 0 disables additive FOV animation.
     CinematicBars = true,
-    FaceCutin = true, -- Static avatar portrait during fusion, High/Max only.
+    CinematicCamera = true, -- Short local camera move during fusion; aim is captured first.
+    CinematicStrength = 0.85, -- 0..1; set 0 for the normal gameplay camera.
+    ShowTitles = false, -- Keep the battlefield readable during the technique.
+    FaceCutin = false, -- Optional portrait overlay when CinematicCamera is disabled.
     MaxProjectiles = 4,
     MaxBursts = 80,
     -- Optional audio owned / authorized for your experience; empty = silent.
@@ -226,7 +229,7 @@ local function orb(parent, color, pale)
     local emitter = particles(outer, pale, 24, 0.3, 5, 0.4)
     local band = ring(parent, pale)
     local tail = trail(outer, 0.8, color, 0.22)
-    local o = {part = outer, core = core, shell = shell, light = light, emitter = emitter, trail = tail}
+    local o = {part = outer, core = core, shell = shell, light = light, emitter = emitter, trail = tail, band = band}
     function o:pose(cf, size, t, alpha)
         alpha = alpha or 0
         outer.CFrame, core.CFrame, shell.CFrame = cf, cf, cf
@@ -309,34 +312,62 @@ local function energyWake(a,b,diameter)
     end)
 end
 
--- Sparse debris ribbon: raycasts sample the ground rather than copying a
--- horizontal crater into the air. Low quality keeps the same scale, fewer pieces.
+-- A decorative furrow follows the shot. Every slab/mark samples an actual
+-- nearby surface; the map, collision, and physics are never modified.
 local function wakeGround(position,direction)
-    local s=scope("GroundWake",1.45,true)
+    local s=scope("SorcererGroundWake",2.65,true)
     if not s then return end
-    local basis=facing(position,direction)
+    local flat=unit(V3(direction.X,0,direction.Z),V3(0,0,-1))
+    local right=flat:Cross(Y)
     local query=RaycastParams.new()
     query.FilterType=Enum.RaycastFilterType.Exclude
     query.FilterDescendantsInstances=player.Character and {world,player.Character} or {world}
     query.IgnoreWater=true
-    local didFind=false
+    local pieces={}
+    local layers=LOW and 1 or (MAX and 3 or 2)
     for _,side in ipairs({-1,1}) do
-        local sample=position+basis.RightVector*side*RNG:NextNumber(7,10)+Y*6
-        local hit=workspace:Raycast(sample,-Y*36,query)
-        if hit then
-            didFind=true
-            local color=hit.Instance:IsA("BasePart") and hit.Instance.Color or Color3.fromRGB(83,77,94)
-            local shard=part(s.folder,color,V3(1.6,0.7,2.4)*RNG:NextNumber(0.7,1.4),0,hit.Material)
-            local start=hit.Position
-            shard.CFrame=CFrame.new(start)
-            local velocity=basis.RightVector*side*13+Y*16
-            animate(s,1.35,function(p,_,t)
-                shard.CFrame=CFrame.new(start+velocity*t-Y*18*t*t)*CFrame.Angles(t*2,side*t,t)
-                shard.Transparency=smooth((p-0.4)/0.6)
-            end)
+        for layer=1,layers do
+            local sample=position+right*side*(6.2+layer*2)+flat*(layer-1)*3+Y*5
+            local hit=workspace:Raycast(sample,-Y*27,query)
+            if hit and hit.Normal.Y>0.45 then
+                local normal=hit.Normal
+                local along=unit(flat-normal*flat:Dot(normal),flat)
+                local surfaceCF=CFrame.lookAt(hit.Position+normal*0.08,hit.Position+normal*0.08+along,normal)
+                local color=hit.Instance:IsA("BasePart") and hit.Instance.Color or Color3.fromRGB(83,77,94)
+                local size=V3(RNG:NextNumber(1.3,2.7),RNG:NextNumber(0.45,0.9),RNG:NextNumber(3.2,5.5))
+                local slab=part(s.folder,color,size,1,hit.Material)
+                slab.CFrame=surfaceCF
+                local mark=part(s.folder,color:Lerp(C.Ink,0.68),V3(size.X*1.3,0.04,size.Z*2),1,Enum.Material.SmoothPlastic)
+                mark.CFrame=surfaceCF
+                local crack
+                if layer==1 then
+                    crack=part(s.folder,C.Purple,V3(0.09,0.05,size.Z*2.6),1)
+                    crack.CFrame=surfaceCF+normal*0.035
+                    if not LOW then
+                        local dust=particles(mark,color:Lerp(Color3.fromRGB(173,165,183),0.4),0,2.3,10,0.75,SMOKE)
+                        dust.LightEmission=0;dust.LightInfluence=1
+                        dust:Emit(MAX and 6 or 3)
+                    end
+                end
+                pieces[#pieces+1]={slab=slab,mark=mark,crack=crack,cf=surfaceCF,
+                    normal=normal,outward=right*side,side=side,delay=(layer-1)*0.035}
+            end
         end
     end
-    if not didFind then s:destroy() end
+    if #pieces==0 then s:destroy();return end
+    animate(s,2.6,function(_,_,elapsed)
+        for _,d in ipairs(pieces) do
+            local t=math.max(0,elapsed-d.delay)
+            local lift=smooth(t/0.18)
+            local settle=smooth((t-0.24)/0.50)
+            local height=lift*(1.5-settle*1.1)
+            d.slab.CFrame=(d.cf+d.normal*height+d.outward*lift*0.65)
+                *CFrame.Angles(0,0,d.side*lerp(0,0.48,lift)*(1-settle*0.55))
+            d.slab.Transparency=elapsed<d.delay and 1 or smooth((t-1.2)/1.1)
+            d.mark.Transparency=lerp(0.26,1,smooth((t-0.9)/1.45))
+            if d.crack then d.crack.Transparency=lerp(0.2,1,smooth(t/0.55)) end
+        end
+    end)
 end
 
 local function impactColumn(position,radius)
@@ -440,13 +471,15 @@ local function makeMaxCharge(parent)
     local seam=maxCurve(carrier,C.Cyan,C.Pink,false)
     local iris=ring(parent,C.White)
     local effect={}
-    function effect:pose(basis,bluePos,redPos,progress,mergeProgress,elapsed,isMerging)
+    function effect:pose(basis,bluePos,redPos,progress,mergeProgress,elapsed,isMerging,mergeBlueReveal,mergeRedReveal)
         carrier.CFrame=basis
         local p=clamp(progress)
         local q=isMerging and clamp(mergeProgress) or 0
         local collapse=isMerging and smooth(q/0.72) or 0
         local birth=isMerging and smooth((q-0.4)/0.3) or 0
         local endFade=isMerging and smooth((q-0.82)/0.18) or 0
+        local blueReveal=isMerging and clamp(mergeBlueReveal or 1) or smooth(p/0.17)
+        local redReveal=isMerging and clamp(mergeRedReveal or 1) or smooth((p-0.22)/0.2)
         local blue=basis:PointToObjectSpace(bluePos)
         local red=basis:PointToObjectSpace(redPos)
         local radius=lerp(11,19,ease(p))*(1-collapse*0.74)
@@ -465,7 +498,7 @@ local function makeMaxCharge(parent)
             -- Sequential intensity pulses read as flow without teleporting Parts.
             local breath=0.5+0.5*math.sin(elapsed*(5+p*3)-i*0.75)
             curve:pose(a,b,c,target,width*(0.6+breath*0.55),0.035,
-                lerp(0.74-p*0.44-breath*0.12,1,endFade))
+                lerp(0.74-p*0.44-breath*0.12,1,math.max(endFade,1-(side==1 and blueReveal or redReveal))))
         end
         for i,needle in ipairs(needles) do
             local side=i%2==0 and 1 or -1
@@ -479,7 +512,7 @@ local function makeMaxCharge(parent)
             needle.CFrame=facing(point,unit(destination-point,basis.LookVector))
             needle.Size=V3(0.045+p*0.035,0.045+p*0.035,lerp(0.7,2.8,cycle)*(1-collapse*0.5))
             local envelope=math.sin(cycle*math.pi)
-            needle.Transparency=lerp(1-envelope*(0.33+p*0.49),1,math.max(endFade,birth*0.75))
+            needle.Transparency=lerp(1-envelope*(0.33+p*0.49),1,math.max(endFade,birth*0.75,1-(side==1 and blueReveal or redReveal)))
         end
         for i,band in ipairs(bands) do
             local blueSide=i%2==0
@@ -491,9 +524,9 @@ local function makeMaxCharge(parent)
             local r=lerp(1.8,4.25,p)+layer*0.85
             r=r*(1-collapse*0.86)
             band:pose(cf,math.max(0.15,r),0.045+p*0.065,
-                lerp(0.68-p*0.3+layer*0.06,1,math.max(endFade,birth)))
+                lerp(0.68-p*0.3+layer*0.06,1,math.max(endFade,birth,1-(blueSide and blueReveal or redReveal))))
         end
-        local joinAlpha=isMerging and (0.23+endFade*0.77) or (0.83-p*0.18)
+        local joinAlpha=isMerging and (0.23+endFade*0.77) or lerp(1,0.83-p*0.18,redReveal)
         local bow=math.max(0.4,(blue-red).Magnitude*0.16)*(1-collapse)
         seam:pose(blue,blue+V3(0,bow,-1),red+V3(0,-bow,-1),red,
             0.06+p*0.08+collapse*0.12,0.06,joinAlpha)
@@ -507,82 +540,112 @@ local function makeMaxCharge(parent)
 end
 
 local function makeMaxProjectile(parent)
-    local carrier=part(parent,C.Purple,ONE*0.05,1)
-    carrier.Name="MAX_CometVolume"
-    -- A dim boundary preserves the silhouette around the existing white nucleus.
-    local boundary=ball(parent,Color3.fromRGB(46,8,79),1,0.66,Enum.Material.SmoothPlastic)
-    local atmosphere=ball(parent,C.Purple,1,0.94,Enum.Material.ForceField)
-    local cage,plumes,bands,spears={},{},{},{}
-    local cageCount=LOW and 4 or (MAX and 10 or 6)
-    local plumeCount=LOW and 3 or (MAX and 7 or 5)
-    local bandCount=LOW and 1 or (MAX and 3 or 2)
-    for i=1,cageCount do
-        cage[i]=maxCurve(carrier,i%3==0 and C.Lilac or C.Purple,C.Lilac,false)
+    local violet=Color3.fromRGB(128,38,246)
+    local deepViolet=Color3.fromRGB(54,13,112)
+    local lavender=Color3.fromRGB(212,177,255)
+    local carrier=part(parent,violet,ONE*0.05,1)
+    carrier.Name="Sorcerer_VioletCrescents"
+    -- The existing orb supplies the solid body. These layers preserve its edge
+    -- and add a faint outer volume instead of covering it in white bloom.
+    local boundary=ball(parent,deepViolet,1,0.62,Enum.Material.SmoothPlastic)
+    local atmosphere=ball(parent,violet,1,0.95,Enum.Material.ForceField)
+    local strips,crescents,wakes,threads={},{},{},{}
+    local stripCount=LOW and 4 or (MAX and 10 or 7)
+    local crescentCount=LOW and 2 or (MAX and 4 or 3)
+    local wakeCount=LOW and 3 or (MAX and 7 or 5)
+    local threadCount=LOW and 1 or (MAX and 3 or 2)
+    for i=1,stripCount do
+        strips[i]={curve=maxCurve(carrier,i%3==0 and lavender or violet,lavender,false),
+            phase=i/stripCount*TAU,tilt=0.35+(i%3)*0.56,
+            direction=i%2==0 and 1 or -1,span=0.8+(i%3)*0.23}
     end
-    for i=1,plumeCount do
-        local color=i%3==0 and C.Lilac or (i%2==0 and C.Purple or C.Blue)
-        plumes[i]=maxCurve(carrier,color,C.Purple,true)
+    for i=1,crescentCount do
+        crescents[i]=maxCurve(carrier,lavender,violet,false)
     end
-    for i=1,bandCount do bands[i]=ring(parent,i==1 and C.Lilac or C.Purple) end
-    local spearCount=LOW and 1 or 2
-    for i=1,spearCount do spears[i]=maxCurve(carrier,C.White,C.Lilac,false) end
+    for i=1,wakeCount do
+        wakes[i]=maxCurve(carrier,i%3==0 and lavender or violet,deepViolet,true)
+    end
+    for i=1,threadCount do threads[i]=maxCurve(carrier,lavender,violet,false) end
+    local frontRim=ring(parent,lavender)
     local effect={}
-    function effect:pose(cf,diameter,elapsed,power)
+
+    -- Four cubic controls for an open arc. maxCurve turns their endpoint
+    -- tangents into Attachment.X axes; both handles point along the curve.
+    local function arc(curve,plane,radius,angle,span,width,alpha)
+        local finish=angle+span
+        local h=4/3*math.tan(span/4)*radius
+        local a=V3(math.cos(angle)*radius,math.sin(angle)*radius,0)
+        local d=V3(math.cos(finish)*radius,math.sin(finish)*radius,0)
+        local b=a+V3(-math.sin(angle),math.cos(angle),0)*h
+        local c=d-V3(-math.sin(finish),math.cos(finish),0)*h
+        curve:pose(plane:PointToWorldSpace(a),plane:PointToWorldSpace(b),
+            plane:PointToWorldSpace(c),plane:PointToWorldSpace(d),width,width*0.1,alpha)
+    end
+
+    function effect:pose(cf,diameter,elapsed,power,travelDistance)
         carrier.CFrame=cf
         local d=math.max(0.1,diameter)
         local t=math.max(0,elapsed)
         local p=clamp(power or 1)
-        local breath=1+0.025*math.sin(t*18)
+        local breath=1+0.018*math.sin(t*12)
         boundary.CFrame=cf
-        boundary.Size=ONE*d*1.06
-        atmosphere.CFrame=cf*CFrame.Angles(t*0.6,-t*0.3,0)
+        boundary.Size=ONE*d*1.055
+        atmosphere.CFrame=cf*CFrame.Angles(t*0.12,-t*0.17,t*0.09)
         atmosphere.Size=ONE*d*2.65*breath
-        -- Same spatial scale at all settings; quality only reduces density.
-        boundary.Transparency=0.66
-        atmosphere.Transparency=0.935+0.009*math.sin(t*11)
-        for i,curve in ipairs(cage) do
-            local side=i%2==0 and 1 or -1
-            local phase=i/cageCount*TAU+t*side*(2.3+p*0.8)
-            local function radial(angle,r,z) return V3(math.cos(angle)*r,math.sin(angle)*r,z) end
-            local a=radial(phase,d*0.25,-d*0.47)
-            local b=radial(phase+side*0.75,d*1.55,-d*0.14)
-            local c=radial(phase+side*1.7,d*1.3,d*0.72)
-            local finish=radial(phase+side*2.2,d*0.25,d*1.04)
-            curve:pose(a,b,c,finish,d*(i%3==0 and 0.026 or 0.045),0.035,
-                i%3==0 and 0.28 or 0.49)
+        atmosphere.Transparency=0.946+0.004*math.sin(t*7)
+
+        -- Separate, uneven strips leave dark gaps between the orbiting energy.
+        -- All planes below are carrier-local: no world-space double transform.
+        for i,item in ipairs(strips) do
+            local phase=item.phase+t*item.direction*(1.45+p*0.35)
+            local plane=CFrame.Angles(item.tilt,item.phase*0.45,phase*0.28)
+            local radius=d*(0.61+(i%3)*0.105)
+            local width=d*(i%3==0 and 0.015 or 0.028)
+            arc(item.curve,plane,radius,phase,item.span,width,
+                i%3==0 and 0.34 or 0.43)
         end
-        -- Tail is in local +Z (opposite LookVector). Never extend past the
-        -- launch point: the length grows only by the distance already flown.
+
+        -- Wider grazing crescents establish the silhouette from the side.
+        -- Their pale leading edge rolls into violet instead of forming a halo.
+        for i,curve in ipairs(crescents) do
+            local phase=i/crescentCount*TAU-t*(i%2==0 and 1.15 or -0.9)
+            local plane=CFrame.Angles(0.45+i*0.27,phase*0.23,i*0.64)
+            arc(curve,plane,d*(0.94+(i%2)*0.08),phase,1.05,
+                d*(i%2==0 and 0.035 or 0.05),0.61)
+        end
+        frontRim:pose(cf*CFrame.new(0,0,-d*0.30)*CFrame.Angles(0.05,0.05,t*0.35),
+            d*0.505,d*0.008,0.44)
+
+        -- +Z is behind the projectile. Keep orbit motion time independent of
+        -- actual distance, including while waiting for the server's Impact.
+        local flown=math.max(0,travelDistance or t*CONFIG.Speed)
         local targetLength=(LOW and 44 or (MAX and 64 or 54))*lerp(0.82,1,p)
-        local tailLength=math.min(targetLength,t*CONFIG.Speed)
-        local tailFade=1-smooth(tailLength/8)
-        for i,curve in ipairs(plumes) do
-            local angle=i/plumeCount*TAU+t*(i%2==0 and 1.0 or -0.85)
-            local r=d*(0.33+0.05*math.sin(t*5+i))
-            local a=V3(math.cos(angle)*r,math.sin(angle)*r,tailLength*0.035)
-            local b=V3(math.cos(angle+0.75)*r*1.5,math.sin(angle+0.75)*r*1.5,tailLength*0.25)
-            local c=V3(math.cos(angle+1.6)*r*0.7,math.sin(angle+1.6)*r*0.7,tailLength*0.73)
-            local finish=V3(math.cos(angle+2)*0.3,math.sin(angle+2)*0.3,tailLength)
-            curve:pose(a,b,c,finish,d*(i%3==0 and 0.14 or 0.31),0.025,
-                lerp(i%3==0 and 0.42 or 0.62,1,tailFade))
+        local tailLength=math.min(targetLength,flown)
+        local tailFade=1-smooth(tailLength/7)
+        for i,curve in ipairs(wakes) do
+            local phase=i/wakeCount*TAU+t*(i%2==0 and 0.48 or -0.4)
+            local radius=d*(0.32+0.035*math.sin(t*3+i))
+            local a=V3(math.cos(phase)*radius,math.sin(phase)*radius,0)
+            local b=V3(math.cos(phase+0.30)*radius*1.42,
+                math.sin(phase+0.30)*radius*1.42,tailLength*0.27)
+            local c=V3(math.cos(phase+0.63)*radius*0.38,
+                math.sin(phase+0.63)*radius*0.38,tailLength*0.73)
+            local finish=V3(math.cos(phase)*0.10,math.sin(phase)*0.10,tailLength)
+            local pale=i%3==0
+            curve:pose(a,b,c,finish,d*(pale and 0.10 or 0.27),0.014,
+                lerp(pale and 0.61 or 0.57,1,tailFade))
         end
-        for i,band in ipairs(bands) do
-            local tilt=i==1 and 0.22 or (i==2 and 1.15 or -0.75)
-            band:pose(cf*CFrame.Angles(tilt,t*(i%2==0 and -1.8 or 1.4),t*0.85+i),
-                d*(0.74+i*0.1),i==1 and 0.11 or 0.08,i==1 and 0.38 or 0.64)
-        end
-        for i,curve in ipairs(spears) do
-            local angle=t*2.7+i*math.pi
-            local x,y=math.cos(angle)*d*0.17,math.sin(angle)*d*0.17
-            local length=tailLength*0.56
-            curve:pose(V3(x,y,0),V3(x*1.3,y*1.3,length*0.25),
-                V3(-x*0.3,-y*0.3,length*0.74),V3(0,0,length),
-                d*0.075,0.018,lerp(0.36,1,tailFade))
+        for i,curve in ipairs(threads) do
+            local phase=t*1.2+i/threadCount*TAU
+            local x,y=math.cos(phase)*d*0.16,math.sin(phase)*d*0.16
+            local length=tailLength*(0.60+i/threadCount*0.20)
+            curve:pose(V3(x,y,0),V3(x*1.1,y*1.1,length*0.24),
+                V3(-x*0.15,-y*0.15,length*0.75),V3(0,0,length),
+                d*0.026,0.01,lerp(0.34,1,tailFade))
         end
     end
     return effect
 end
-
 
 -- Screen treatment: thin cinematic bars, restrained typography and edge lines.
 local overlay = new("Frame",gui,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Active=false,ZIndex=20})
@@ -597,7 +660,7 @@ local title = new("TextLabel",overlay,{AnchorPoint=Vector2.new(0.5,0.5),Position
     TextStrokeColor3=C.Ink,TextStrokeTransparency=0.4})
 new("UITextSizeConstraint",title,{MaxTextSize=68,MinTextSize=18})
 local subtitle = new("TextLabel",overlay,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.17),
-    Size=UDim2.fromScale(0.8,0.035),BackgroundTransparency=1,Text="200%  /  MAXIMUM OUTPUT",
+    Size=UDim2.fromScale(0.8,0.035),BackgroundTransparency=1,Text="200%  /  HOLLOW TECHNIQUE",
     TextColor3=C.Lilac,TextTransparency=1,Font=Enum.Font.GothamMedium,TextScaled=true,ZIndex=42})
 new("UITextSizeConstraint",subtitle,{MaxTextSize=14,MinTextSize=9})
 local gradient = new("UIGradient",title,{Color=ColorSequence.new({
@@ -666,7 +729,7 @@ local function clearFace()
 end
 local function buildFace(character)
     clearFace()
-    if LOW or not CONFIG.FaceCutin or #character:GetDescendants()>600 then return end
+    if LOW or not CONFIG.FaceCutin or CONFIG.CinematicCamera or #character:GetDescendants()>600 then return end
     local before=character.Archivable
     local ok,copy=pcall(function() character.Archivable=true; return character:Clone() end)
     pcall(function() character.Archivable=before end)
@@ -720,6 +783,12 @@ local qualityButton=new("TextButton",gui,{AnchorPoint=Vector2.new(1,1),Size=UDim
     Font=Enum.Font.GothamBold,ZIndex=102})
 new("UICorner",qualityButton,{CornerRadius=UDim.new(0,7)})
 new("UIStroke",qualityButton,{Color=C.Purple,Thickness=1,Transparency=0.5})
+local cinemaButton=new("TextButton",gui,{AnchorPoint=Vector2.new(1,1),Size=UDim2.fromOffset(104,24),
+    Position=UDim2.new(1,-28,1,-328),BackgroundColor3=C.Ink,BackgroundTransparency=0.24,
+    BorderSizePixel=0,AutoButtonColor=false,Text="CAMERA: ON",TextColor3=C.Lilac,TextSize=10,
+    Font=Enum.Font.GothamMedium,ZIndex=102})
+new("UICorner",cinemaButton,{CornerRadius=UDim.new(0,6)})
+connect(cinemaButton.Activated,function() CONFIG.CinematicCamera=not CONFIG.CinematicCamera end)
 local qualityNames={"Max","High","Low"}
 local currentQuality=LOW and "Low" or (MAX and "Max" or "High")
 local wantedQuality=currentQuality
@@ -742,6 +811,8 @@ local function drawMaxScreen(now)
     qualityButton.Text=string.upper(currentQuality)..(wantedQuality~=currentQuality and " → "..string.upper(wantedQuality) or "  /  K")
     qualityButton.Position=UDim2.new(1,button.Position.X.Offset,1,
         button.Position.Y.Offset-button.Size.Y.Offset-8)
+    cinemaButton.Position=UDim2.new(1,qualityButton.Position.X.Offset,1,qualityButton.Position.Y.Offset-34)
+    cinemaButton.Text=CONFIG.CinematicCamera and "CAMERA: ON" or "CAMERA: OFF"
     local q=charge and state=="Merging" and clamp((now-charge.mergeAt)/CONFIG.MergeTime) or -1
     local alpha=q>=0 and smooth(q/0.09)*(1-smooth((q-0.43)/0.2)) or 0
     cutin.Visible=alpha>0.002 and faceHead~=nil
@@ -760,6 +831,7 @@ local function drawMaxScreen(now)
         faceCamera.Focus=CFrame.new(point)
     end
     local reveal=q>=0 and smooth((q-0.47)/0.1)*(1-smooth((q-0.87)/0.13)) or 0
+    reveal=CONFIG.ShowTitles and reveal or 0
     outputTitle.TextTransparency=1-reveal*0.9
     outputTitle.TextStrokeTransparency=1-reveal*0.6
     outputTitle.Size=UDim2.fromScale(0.75,0.12+reveal*0.035)
@@ -833,10 +905,92 @@ local function muzzlePosition(root,direction)
     end
     return root.Position+Y*CONFIG.MuzzleHeight+direction*forward
 end
+-- Original merge shot. Insert after muzzlePosition / rayParams definitions.
+-- Called after the default camera updates, with its unmodified CFrame and FOV.
+-- The caller owns removal of the relative camera delta before the next camera
+-- update, shutdown, cancellation, death, and Infinite Void camera takeover.
+-- This helper creates no Instances, events, animation jobs, or delayed work.
+local function sorcererShot(ch,q,baseCF,baseFov)
+    if not CONFIG.CinematicCamera or not ch or ch.shotBlocked or not ch.char or not ch.root
+        or q<=0 or q>=0.96 then return baseCF,baseFov end
+    local strength=clamp(CONFIG.CinematicStrength or 1)
+    if strength<=0 or not ch.char.Parent or not ch.root.Parent then
+        return baseCF,baseFov
+    end
+    local hum=ch.char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health<=0 or not ch.direction then return baseCF,baseFov end
+
+    -- Never derive aim from this shot: releaseCharge captured it beforehand.
+    local root=ch.root
+    local forward=unit(V3(ch.direction.X,0,ch.direction.Z),
+        unit(V3(root.CFrame.LookVector.X,0,root.CFrame.LookVector.Z),V3(0,0,-1)))
+    local right=unit(forward:Cross(Y),V3(1,0,0))
+    if not ch.shotSide then
+        ch.shotSide=(baseCF.Position-root.Position):Dot(right)<0 and -1 or 1
+        ch.shotParams=rayParams(ch.char)
+    end
+    local side=right*ch.shotSide
+    local orb=muzzlePosition(root,ch.direction)
+    local anchor=root.Position+Y*2
+    -- The default first-person controller hides the avatar locally. Preserve
+    -- that view instead of moving to an exterior shot of an invisible caster.
+    if (baseCF.Position-anchor).Magnitude<3 then return baseCF,baseFov end
+    local turn=smooth((q-0.16)/0.56)
+    local weight=smooth(q/0.22)*(1-smooth((q-0.64)/0.32))*strength
+    if weight<=0.00001 then return baseCF,baseFov end
+
+    -- Low three-quarter view develops into a wider side view. Both the caster
+    -- and the orb fit the composition; the camera does not enter the effect.
+    local goal=root.Position+forward*lerp(9,15,turn)
+        +side*lerp(17,23,turn)+Y*lerp(3.0,7.0,turn)
+    local focus=anchor:Lerp(orb,lerp(0.33,0.60,turn))
+    local clearRadius=math.max(8,CONFIG.ProjectileRadius+2)
+    local from=baseCF.Position-orb
+    local to=goal-orb
+    if from.Magnitude<clearRadius or from.Magnitude>400 or to.Magnitude<clearRadius then
+        return baseCF,baseFov
+    end
+
+    -- Slerp around the sphere, instead of linearly cutting through its center.
+    -- Using the existing facing helper also handles nearly vertical vectors.
+    local orbitFrom=facing(orb,from.Unit)
+    local orbitTo=facing(orb,to.Unit)
+    local orbit=orbitFrom:Lerp(orbitTo,weight)
+    local position=orb+orbit.LookVector*lerp(from.Magnitude,to.Magnitude,weight)
+    local params=ch.shotParams
+    local sight=position-anchor
+    if sight.Magnitude<3 then return baseCF,baseFov end
+
+    -- The sphere sweep protects the near plane; the ray protects composition.
+    -- A close wall disables the shot rather than pulling the camera into the
+    -- character. Only this optional camera is affected; the cast keeps going.
+    local blocked=workspace:Raycast(anchor,sight,params)
+        or workspace:Spherecast(anchor,0.55,sight,params)
+    if blocked then
+        ch.shotBlocked=true
+        ch.shotLastPosition=nil
+        return baseCF,baseFov
+    end
+    local previous=ch.shotLastPosition or baseCF.Position
+    local move=position-previous
+    if move.Magnitude>0.01 and workspace:Spherecast(previous,0.55,move,params) then
+        ch.shotBlocked=true
+        ch.shotLastPosition=nil
+        return baseCF,baseFov
+    end
+    ch.shotLastPosition=position
+
+    local target=facing(position,unit(focus-position,baseCF.LookVector))
+    local rotation=(baseCF-baseCF.Position):Lerp(target-target.Position,weight)
+    local shot=CFrame.new(position)*rotation
+    local fov=lerp(baseFov,lerp(52,59,turn),weight)
+    return shot,fov
+end
+
 local function chargeBasis(root)
     local direction = aim(root)
     local chest = root.Position+Y*1.5
-    local target = muzzlePosition(root,direction)
+    local target = root.Position+Y*2.2+direction*3.5
     local offset = target-chest
     local hit = workspace:Raycast(chest,offset,rayParams(player.Character))
     local pos = hit and hit.Position-unit(offset,direction)*0.6 or target
@@ -1108,15 +1262,10 @@ local function launch(userId,id,origin,direction,power,authoritative)
     if not own and cam and (cam.CFrame.Position-origin).Magnitude>CONFIG.VisibleDistance then return end
     local flightTimeout=CONFIG.MaxRange/CONFIG.Speed+1.6
     local s=scope("Projectile",flightTimeout+0.25,false)
-    local core=orb(s.folder,C.Purple,C.White)
-    local ring2=ring(s.folder,C.Lilac)
+    local core=orb(s.folder,C.Purple,Color3.fromRGB(212,177,255))
     local maxCore=makeMaxProjectile(s.folder)
     core.trail.Lifetime=LOW and 0.42 or 0.6
     core.emitter.Rate=LOW and 32 or 64
-    local satelliteA=ball(s.folder,C.Blue,1.3,0.15)
-    local satelliteB=ball(s.folder,C.Red,1.3,0.15)
-    trail(satelliteA,1.8,C.Blue,0.5)
-    trail(satelliteB,1.8,C.Red,0.5)
     local sourcePlayer=Players:GetPlayerByUserId(userId)
     local params=rayParams(sourcePlayer and sourcePlayer.Character)
     local p={scope=s,pos=origin,direction=direction,travelled=0,arcAt=0,waveAt=0,own=own,
@@ -1126,9 +1275,16 @@ local function launch(userId,id,origin,direction,power,authoritative)
     core.trail.Attachment0.Position=V3(0,diameter*0.4,0)
     core.trail.Attachment1.Position=V3(0,-diameter*0.4,0)
     -- Set the emitter's position before starting audio or the first render.
-    core:pose(facing(origin,direction),diameter,0)
-    maxCore:pose(facing(origin,direction),diameter,0,power)
-    satelliteA.Position, satelliteB.Position=origin,origin
+    local function poseCore(cf,size,t)
+        core:pose(cf,size,t)
+        core.part.Transparency=0.16
+        core.core.Size=ONE*size*0.38
+        core.core.Transparency=0.12
+        core.shell.Transparency=0.91
+        for _,beam in ipairs(core.band.beams) do beam.Enabled=false end
+    end
+    poseCore(facing(origin,direction),diameter,0)
+    maxCore:pose(facing(origin,direction),diameter,0,power,0)
     sound(core.part,CONFIG.ReleaseSound,0.75)
     if own then
         state="Recovery"
@@ -1159,13 +1315,8 @@ local function launch(userId,id,origin,direction,power,authoritative)
         end
         local cf=facing(p.pos,direction)
         local pulse=1+0.035*math.sin(t*35)
-        core:pose(cf,diameter*pulse,t*2.5)
-        maxCore:pose(cf,diameter,math.min(t,(p.pos-origin).Magnitude/CONFIG.Speed),power)
-        ring2:pose(cf*CFrame.Angles(0.5,t*5,t*2),diameter,0.24,0.3)
-        local spin=t*17
-        local offset=(cf.RightVector*math.cos(spin)+cf.UpVector*math.sin(spin))*diameter*0.65
-        satelliteA.CFrame=facing(p.pos+offset,direction)
-        satelliteB.CFrame=facing(p.pos-offset,direction)
+        poseCore(cf,diameter*pulse,t*1.5)
+        maxCore:pose(cf,diameter,t,power,(p.pos-origin).Magnitude)
         if t>=p.arcAt then
             p.arcAt=t+(LOW and 0.12 or 0.075)
             local v=cf.RightVector*RNG:NextNumber(-16,16)+cf.UpVector*RNG:NextNumber(-16,16)-direction*12
@@ -1243,8 +1394,10 @@ local function startCharge(input)
     charge={scope=s,start=os.clock(),blue=blue,red=red,purple=purple,halo=halo,halo2=halo2,stones=stones,
         root=root,char=char,arcAt=0,sparkAt=0,highlight=highlight,ready=false,maxCharge=maxCharge}
     local basis=chargeBasis(root)
-    blue:pose(basis*CFrame.new(6.4,0,0),1.8,0)
-    red:pose(basis*CFrame.new(-6.4,0,0),1.8,0)
+    blue:pose(basis*CFrame.new(-6.4,0.5,0),1.8,0,1)
+    red:pose(basis*CFrame.new(6.4,0.5,0),1.8,0,1)
+    blue.emitter.Enabled=false; red.emitter.Enabled=false
+    blue.trail.Enabled=false; red.trail.Enabled=false
     blue.trail.Attachment0.Position=V3(0,0.9,0)
     blue.trail.Attachment1.Position=V3(0,-0.9,0)
     red.trail.Attachment0.Position=V3(0,0.9,0)
@@ -1273,6 +1426,8 @@ local function releaseCharge()
     charge.blueOffset=mergeBasis:PointToObjectSpace(charge.blue.part.Position)
     charge.redOffset=mergeBasis:PointToObjectSpace(charge.red.part.Position)
     charge.startSize=charge.blue.part.Size.X
+    charge.blueVisibility=1-charge.blue.core.Transparency
+    charge.redVisibility=1-charge.red.core.Transparency
     charge.blue.trail.Enabled=false
     charge.red.trail.Enabled=false
     charge.blue.emitter.Enabled=false
@@ -1294,6 +1449,10 @@ local function updateCharge(now)
     local p=clamp(elapsed/CONFIG.ChargeTime)
     local basis,direction=chargeBasis(root)
     local merge=state=="Merging" and clamp((now-ch.mergeAt)/CONFIG.MergeTime) or 0
+    if state=="Merging" then
+        direction=ch.direction
+        basis=facing(muzzlePosition(root,direction),direction)
+    end
     for _,rock in ipairs(ch.stones) do
         local home=root.Position+rock.offset+Y*(ease(p)*6+math.sin(elapsed*2+rock.seed)*p*0.4)
         local position=home:Lerp(basis.Position,smooth(merge)*0.88)
@@ -1302,12 +1461,20 @@ local function updateCharge(now)
     end
     if state=="Charging" then
         chargeAmount=p
-        local angle=elapsed*(1.8+p*1.8)
-        local radius=lerp(6.4,5.0,p)
-        local offset=V3(math.cos(angle)*radius,math.sin(angle)*radius*0.64,0)
-        local size=lerp(1.8,5.2,p)*(1+0.025*math.sin(elapsed*27))
-        ch.blue:pose(basis*CFrame.new(offset),size,elapsed)
-        ch.red:pose(basis*CFrame.new(-offset),size,-elapsed)
+        -- Two readable side sources: Blue establishes first, then Red answers.
+        local radius=lerp(6.4,5.1,smooth(p))
+        local sway=math.sin(elapsed*2.0)*0.35*p
+        local blueOffset=V3(-radius,0.6+sway,0.3*math.sin(elapsed))
+        local redOffset=V3(radius,0.6-sway,-0.3*math.sin(elapsed))
+        local size=lerp(1.8,4.7,p)*(1+0.018*math.sin(elapsed*18))
+        local blueReveal=smooth(p/0.17)
+        local redReveal=smooth((p-0.22)/0.2)
+        ch.blue:pose(basis*CFrame.new(blueOffset),size,elapsed,1-blueReveal)
+        ch.red:pose(basis*CFrame.new(redOffset),size,-elapsed,1-redReveal)
+        ch.blue.emitter.Enabled=blueReveal>0.55
+        ch.red.emitter.Enabled=redReveal>0.55
+        ch.blue.trail.Enabled=blueReveal>0.9
+        ch.red.trail.Enabled=redReveal>0.9
         ch.purple:pose(basis,0.05,elapsed,1)
         ch.maxCharge:pose(basis,ch.blue.part.Position,ch.red.part.Position,p,0,elapsed,false)
         ch.halo:pose(basis*CFrame.Angles(0,0,elapsed*0.4),13.5-p*1.5,0.12,0.85-p*0.35)
@@ -1320,7 +1487,7 @@ local function updateCharge(now)
             wave(basis.Position,basis-basis.Position,C.White,22,0.6,0.3)
             shake(0.2)
         end
-        if now>=ch.arcAt then
+        if p>0.42 and now>=ch.arcAt then
             ch.arcAt=now+lerp(0.25,0.11,p)*(LOW and 1.4 or 1)
             bolt(ch.blue.part.Position,ch.red.part.Position,C.Lilac,0.055+p*0.09,0.13)
         end
@@ -1346,25 +1513,28 @@ local function updateCharge(now)
         local q=clamp(t/CONFIG.MergeTime)
         local directionFixed=ch.direction
         basis=facing(muzzlePosition(root,directionFixed),directionFixed)
-        local closing=ease(q/0.68)
-        local rotation=CFrame.Angles(0,0,q*math.pi*1.5)
+        local closing=smooth((q-0.07)/0.51)
+        local rotation=CFrame.Angles(0,0,math.sin(q*math.pi)*0.32)
         local blueOffset=rotation:VectorToWorldSpace(ch.blueOffset)*(1-closing)
         local redOffset=rotation:VectorToWorldSpace(ch.redOffset)*(1-closing)
-        local fade=smooth((q-0.46)/0.3)
-        ch.blue:pose(basis*CFrame.new(blueOffset),lerp(ch.startSize,0.1,closing),elapsed,fade)
-        ch.red:pose(basis*CFrame.new(redOffset),lerp(ch.startSize,0.1,closing),-elapsed,fade)
-        local born=smooth((q-0.35)/0.3)
+        local fade=smooth((q-0.43)/0.23)
+        local blueReveal=lerp(ch.blueVisibility,1,smooth(q/0.18))*(1-fade)
+        local redReveal=lerp(ch.redVisibility,1,smooth(q/0.18))*(1-fade)
+        ch.blue:pose(basis*CFrame.new(blueOffset),lerp(ch.startSize,0.1,closing),elapsed,1-blueReveal)
+        ch.red:pose(basis*CFrame.new(redOffset),lerp(ch.startSize,0.1,closing),-elapsed,1-redReveal)
+        local born=smooth((q-0.40)/0.22)
         ch.purple:pose(basis,math.max(0.05,lerp(0.1,CONFIG.ProjectileDiameter*0.85,born)
             *(1-0.18*smooth((q-0.85)/0.15))),elapsed,1-born)
         ch.halo:pose(basis*CFrame.Angles(q*1.2,0,-q*4),lerp(12,0.6,closing),0.2,q)
         ch.halo2:pose(basis*CFrame.Angles(0.5,q,-q*5),lerp(12,6,born),0.16,lerp(0.45,1,q))
-        ch.maxCharge:pose(basis,ch.blue.part.Position,ch.red.part.Position,p,q,elapsed,true)
+        ch.maxCharge:pose(basis,ch.blue.part.Position,ch.red.part.Position,p,q,elapsed,true,blueReveal,redReveal)
         chargeAmount=lerp(ch.power,1,q)
-        if q>0.62 and not ch.merged then
+        if q>0.58 and not ch.merged then
             ch.merged=true
             wave(basis.Position,basis-basis.Position,C.White,26,0.4,0.4)
             launchFlare(basis.Position)
             shake(0.3)
+            impactFrame(0.26)
         end
         if q>=1 then
             local id=HttpService:GenerateGUID(false)
@@ -1521,6 +1691,7 @@ local function render(dt)
     for _,edge in ipairs(edges) do edge.BackgroundTransparency=1-activity*0.32 end
     local titleAge=now-titleAt
     local titleVisibility=titleAge>=0 and clamp(titleAge/0.09)*(1-smooth((titleAge-0.32)/0.35)) or 0
+    titleVisibility=CONFIG.ShowTitles and titleVisibility or 0
     title.TextTransparency=1-titleVisibility
     title.TextStrokeTransparency=1-titleVisibility*0.7
     subtitle.TextTransparency=1-titleVisibility
@@ -1565,18 +1736,23 @@ local function render(dt)
         blur.Size=(releasePulse+impactPulse)*1.1
         -- World VFX keep running while Infinite Void owns the cinematic camera.
         -- Camera-1 still removes any preceding Purple offset before this check.
-        if not camera:GetAttribute("InfiniteVoidCameraOwner") then
+        if not camera:GetAttribute("InfiniteVoidCameraOwner") and camera.CameraType~=Enum.CameraType.Scriptable then
+            local baseCF,baseFov=camera.CFrame,camera.FieldOfView
+            local shotCF,shotFov=baseCF,baseFov
+            if state=="Merging" and charge then
+                shotCF,shotFov=sorcererShot(charge,clamp((now-charge.mergeAt)/CONFIG.MergeTime),baseCF,baseFov)
+            end
             local magnitude=shakeEnergy
             local delta=CFrame.new(math.noise(shakeClock*29,0)*magnitude*0.22,
                 math.noise(0,shakeClock*31)*magnitude*0.18,0)
                 *CFrame.Angles(0,0,math.noise(shakeClock*22,7)*magnitude*0.012)
             local fov=CONFIG.FovKick*(releasePulse*0.9+chargeAmount*0.45)
-            local desired=math.clamp(camera.FieldOfView+fov,1,120)
-            cameraState.fov=desired-camera.FieldOfView
+            local desired=math.clamp(shotFov+fov,1,120)
+            cameraState.fov=desired-baseFov
             camera.FieldOfView=desired
             cameraState.lastFov=desired
-            camera.CFrame=camera.CFrame*delta
-            cameraState.delta=delta
+            camera.CFrame=shotCF*delta
+            cameraState.delta=baseCF:ToObjectSpace(camera.CFrame)
             cameraState.applied=camera.CFrame
         end
     end
@@ -1607,4 +1783,3 @@ RunService:BindToRenderStep(renderAfter,Enum.RenderPriority.Camera.Value+1,funct
         shutdown()
     end
 end)
-
