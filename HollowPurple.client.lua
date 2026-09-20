@@ -464,6 +464,9 @@ local function restoreCamera()
     cameraState.delta, cameraState.applied, cameraState.lastFov = nil,nil,nil
     cameraState.fov = 0
 end
+-- Synchronous camera handoff lets another cinematic capture a clean base pose/FOV.
+local releaseCamera = new("BindableFunction",gui,{Name="ReleaseCamera"})
+releaseCamera.OnInvoke = restoreCamera
 
 local function characterParts()
     local char = player.Character
@@ -700,10 +703,16 @@ local function cancel()
     clearCharge()
     state="Idle"
 end
+-- Shared crowd-control/cinematic attributes belong to InfiniteVoid.
+-- Keep launched projectiles alive; only pending charge/merge is interrupted.
+local function voidBlocksCasting(character)
+    return character and (character:GetAttribute("InfiniteVoidOverloaded")==true
+        or character:GetAttribute("InfiniteVoidCasting")==true)
+end
 local function startCharge(input)
     if not alive or state~="Idle" or os.clock()<nextCastAt then return end
     local char,root=characterParts()
-    if not root then return end
+    if not root or voidBlocksCasting(char) then return end
     local s=scope("Charge",nil,false)
     local blue=orb(s.folder,C.Blue,C.Cyan)
     local red=orb(s.folder,C.Red,C.Pink)
@@ -750,7 +759,7 @@ local function releaseCharge()
     local elapsed=os.clock()-charge.start
     if elapsed<CONFIG.MinCharge then cancel(); return end
     local char,root=characterParts()
-    if not root or char~=charge.char then cancel(); return end
+    if not root or char~=charge.char or voidBlocksCasting(char) then cancel(); return end
     state="Merging"
     charge.mergeAt=os.clock()
     charge.power=math.clamp(elapsed/CONFIG.ChargeTime,0.15,1)
@@ -772,7 +781,10 @@ local function updateCharge(now)
     if not charge then return end
     local ch=charge
     local char,root=characterParts()
-    if char~=ch.char or root~=ch.root then cancel(); return end
+    if char~=ch.char or root~=ch.root or voidBlocksCasting(char) then
+        -- cancel clears charge, so subsequent frames send no additional Cancel.
+        cancel(); return
+    end
     local elapsed=now-ch.start
     local p=clamp(elapsed/CONFIG.ChargeTime)
     local basis,direction=chargeBasis(root)
@@ -1040,18 +1052,22 @@ local function render(dt)
         cc.Brightness=releasePulse*0.015-chargeAmount*0.025
         bloom.Intensity=activity*(LOW and 0.55 or 0.85)
         blur.Size=(releasePulse+impactPulse)*1.7
-        local magnitude=shakeEnergy
-        local delta=CFrame.new(math.noise(shakeClock*29,0)*magnitude*0.22,
-            math.noise(0,shakeClock*31)*magnitude*0.18,0)
-            *CFrame.Angles(0,0,math.noise(shakeClock*22,7)*magnitude*0.012)
-        local fov=CONFIG.FovKick*(releasePulse*0.9+chargeAmount*0.45)
-        local desired=math.clamp(camera.FieldOfView+fov,1,120)
-        cameraState.fov=desired-camera.FieldOfView
-        camera.FieldOfView=desired
-        cameraState.lastFov=desired
-        camera.CFrame=camera.CFrame*delta
-        cameraState.delta=delta
-        cameraState.applied=camera.CFrame
+        -- World VFX keep running while Infinite Void owns the cinematic camera.
+        -- Camera-1 still removes any preceding Purple offset before this check.
+        if not camera:GetAttribute("InfiniteVoidCameraOwner") then
+            local magnitude=shakeEnergy
+            local delta=CFrame.new(math.noise(shakeClock*29,0)*magnitude*0.22,
+                math.noise(0,shakeClock*31)*magnitude*0.18,0)
+                *CFrame.Angles(0,0,math.noise(shakeClock*22,7)*magnitude*0.012)
+            local fov=CONFIG.FovKick*(releasePulse*0.9+chargeAmount*0.45)
+            local desired=math.clamp(camera.FieldOfView+fov,1,120)
+            cameraState.fov=desired-camera.FieldOfView
+            camera.FieldOfView=desired
+            cameraState.lastFov=desired
+            camera.CFrame=camera.CFrame*delta
+            cameraState.delta=delta
+            cameraState.applied=camera.CFrame
+        end
     end
 end
 
