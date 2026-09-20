@@ -1,4 +1,22 @@
-# Hollow Purple — 200% / Anime Edition
+# Anime Abilities — Infinite Void / Hollow Purple
+
+## Бесконечная пустота
+
+Кинематографичная территория: крупный план аватара, чёрный сферический барьер, космический интерьер и потоки информации. **V** или кнопка **ПУСТОТА**: радиус **85 studs**, подготовка **3,2 с**, перегрузка **8 с**, перезарядка **28 с**.
+
+[Установка, управление и настройки Infinite Void](INFINITE_VOID.md).
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/heisenberg1234567891000-ship-it/Script/main/InfiniteVoid.client.lua", true))()
+```
+
+Строка предназначена для клиентской среды с поддержкой `loadstring` и `game:HttpGet`. Для реальной заморозки игроков владелец плейса устанавливает [InfiniteVoid.server.lua](InfiniteVoid.server.lua) в `ServerScriptService`, а [InfiniteVoid.client.lua](InfiniteVoid.client.lua) — как LocalScript в `StarterPlayerScripts`. Без сервера работает визуальный просмотр.
+
+Hollow Purple обновлён для совместной работы: перегрузка блокирует заряд, а камера уступает управление катсцене. Обнови обе его части при установке территории. В Roblox Studio этот комплект ещё не запускался; выполнены статические проверки и тесты логики на имитации API.
+
+---
+
+## Hollow Purple — 200% / Anime Edition
 
 Процедурный эффект для Roblox: слияние синей и красной энергии, крупный фиолетовый снаряд, молнии, шлейфы, обломки и ударные волны. «200%» — название режима, а не одинаковый множитель всех параметров.
 
