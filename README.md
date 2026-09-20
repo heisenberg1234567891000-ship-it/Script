@@ -1,4 +1,18 @@
-# Anime Abilities — Infinite Void / Hollow Purple
+# Anime Abilities — Return By Death / Infinite Void / Hollow Purple
+
+## Возвращение после смерти
+
+**B** или кнопка со стрелкой сохраняет точку. После обычной игровой смерти и штатного возрождения сервер возвращает персонажа к сохранённой позиции и здоровью; клиент показывает часы с обратным ходом и новый цикл.
+
+[Установка и ограничения Return By Death](RETURN_BY_DEATH.md).
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/heisenberg1234567891000-ship-it/Script/main/ReturnByDeath.client.lua", true))()
+```
+
+Полная способность требует [ReturnByDeath.server.lua](ReturnByDeath.server.lua) в `ServerScriptService` своего плейса. Без сервера доступны только визуальные эффекты. Работа во всех чужих режимах не обещается: их правила возрождения и состояния задаются владельцами. Карта, другие игроки и инвентарь не откатываются.
+
+---
 
 ## Бесконечная пустота
 
