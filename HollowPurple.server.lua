@@ -66,6 +66,12 @@ local function livingCharacter(player)
 	end
 end
 
+-- This is a cast lock, not a life-state check: launched shots must finish.
+local function voidBlocksCasting(character)
+	return character and (character:GetAttribute("InfiniteVoidOverloaded") == true
+		or character:GetAttribute("InfiniteVoidCasting") == true)
+end
+
 local function castParams(character)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
@@ -238,7 +244,13 @@ connections[#connections + 1] = remote.OnServerEvent:Connect(function(player, ac
 	if action == "Cancel" then
 		state.began, state.character = nil, nil
 		return
-	elseif action == "Begin" then
+	end
+	if voidBlocksCasting(player.Character) then
+		state.began, state.character = nil, nil
+		if action == "Fire" then reject(player, state, id, now) end
+		return
+	end
+	if action == "Begin" then
 		local character = livingCharacter(player)
 		if character and not state.active and now - state.lastCast >= CONFIG.Cooldown then
 			-- Repeated Begin packets cannot reset a valid charge.
@@ -305,7 +317,8 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function(dt)
 	for player, state in pairs(states) do
 		if state.began then
 			local character = livingCharacter(player)
-			if character ~= state.character or os.clock() - state.began > CONFIG.ChargeTimeout then
+			if character ~= state.character or voidBlocksCasting(character)
+				or os.clock() - state.began > CONFIG.ChargeTimeout then
 				state.began, state.character = nil, nil
 			end
 		end
